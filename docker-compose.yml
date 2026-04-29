@@ -10,7 +10,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=true
       - xpack.security.enrollment.enabled=true
-      - ELASTIC_PASSWORD=umaarlll 
+      - ELASTIC_PASSWORD=<PASSWORD> 
       - ES_JAVA_OPTS=-Xms2g -Xmx2g
     ports:
       - "9200:9200"
