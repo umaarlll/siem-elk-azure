@@ -3,3 +3,5 @@ logs/
 *.env
 cloudflared.log
 *.csv
+terraform.tfvars
+.env

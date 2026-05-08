@@ -10,7 +10,10 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=true
       - xpack.security.enrollment.enabled=true
-      - ELASTIC_PASSWORD=<PASSWORD> 
+
+
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD} 
+
       - ES_JAVA_OPTS=-Xms2g -Xmx2g
     ports:
       - "9200:9200"
@@ -25,7 +28,10 @@ services:
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - ELASTICSEARCH_USERNAME=kibana_system
-      - ELASTICSEARCH_PASSWORD=<PASSWORD>
+
+
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+
     ports:
       - "5601:5601"
     depends_on:
