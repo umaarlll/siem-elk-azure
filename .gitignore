@@ -5,3 +5,4 @@ cloudflared.log
 *.csv
 terraform.tfvars
 .env
+terraform/.terraform/
