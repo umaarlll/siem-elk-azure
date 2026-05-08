@@ -6,3 +6,8 @@ cloudflared.log
 terraform.tfvars
 .env
 terraform/.terraform/
+SIEM-ELK-Server_key.pem
+cloudflared.log
+tunnel.log
+nohup.out
+logs/
