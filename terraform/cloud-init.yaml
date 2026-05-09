@@ -1,0 +1,28 @@
+#cloud-config
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+
+runcmd:
+  # Install Docker
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  - echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu jammy stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - usermod -aG docker azureuser
+
+  # Set vm.max_map_count for Elasticsearch
+  - echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+  - sysctl -w vm.max_map_count=262144
+
+  # Create ELK directory
+  - mkdir -p /home/azureuser/ELK/logstash
+  - mkdir -p /home/azureuser/ELK/logs
+  - chown -R azureuser:azureuser /home/azureuser/ELK

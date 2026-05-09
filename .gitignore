@@ -11,3 +11,4 @@ cloudflared.log
 tunnel.log
 nohup.out
 logs/
+
