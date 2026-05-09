@@ -12,3 +12,5 @@ tunnel.log
 nohup.out
 logs/
 
+terraform/*.tfstate
+terraform/*.tfstate.backup
