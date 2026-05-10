@@ -18,11 +18,192 @@ runcmd:
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - usermod -aG docker azureuser
 
-  # Set vm.max_map_count for Elasticsearch
+  # Set vm.max_map_count
   - echo "vm.max_map_count=262144" >> /etc/sysctl.conf
   - sysctl -w vm.max_map_count=262144
 
-  # Create ELK directory
+  # Create ELK directory structure
   - mkdir -p /home/azureuser/ELK/logstash
   - mkdir -p /home/azureuser/ELK/logs
+
+  # Download datasets from Azure Blob Storage
+  - curl -o /home/azureuser/ELK/logs/elk-dataset-1.csv "https://siemelkstorage.blob.core.windows.net/datasets/elk-dataset-1.csv"
+  - curl -o /home/azureuser/ELK/logs/elk-dataset-2.csv "https://siemelkstorage.blob.core.windows.net/datasets/elk-dataset-2.csv"
+
+  # Download and run fix_coordinates.py on dataset1
+  - curl -o /home/azureuser/ELK/fix_coordinates.py "https://raw.githubusercontent.com/umaarlll/siem-elk-azure/main/fix_coordinates.py"
+  - apt-get install -y python3
+  - python3 /home/azureuser/ELK/fix_coordinates.py /home/azureuser/ELK/logs/elk-dataset-1.csv /home/azureuser/ELK/logs/elk-dataset-1-fixed.csv
+  - mv /home/azureuser/ELK/logs/elk-dataset-1-fixed.csv /home/azureuser/ELK/logs/elk-dataset-1.csv
+
+  # Write .env file
+  - echo "ELASTIC_PASSWORD=umaarlll" > /home/azureuser/ELK/.env
+
+  # Write docker-compose.yml
+  - |
+    cat > /home/azureuser/ELK/docker-compose.yml << 'EOF'
+    version: '3.8'
+    services:
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        container_name: elasticsearch
+        environment:
+          - node.name=es01
+          - cluster.name=siem-cluster
+          - discovery.type=single-node
+          - xpack.security.enabled=true
+          - xpack.security.enrollment.enabled=true
+          - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+          - ES_JAVA_OPTS=-Xms2g -Xmx2g
+        ports:
+          - "9200:9200"
+        volumes:
+          - es_data:/usr/share/elasticsearch/data
+        networks:
+          - elk
+      kibana:
+        image: docker.elastic.co/kibana/kibana:8.13.0
+        container_name: kibana
+        environment:
+          - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+          - ELASTICSEARCH_USERNAME=kibana_system
+          - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+        ports:
+          - "5601:5601"
+        depends_on:
+          - elasticsearch
+        networks:
+          - elk
+      logstash:
+        image: docker.elastic.co/logstash/logstash:8.13.0
+        container_name: logstash
+        environment:
+          - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+        volumes:
+          - ./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+          - ./logs:/logs
+        depends_on:
+          - elasticsearch
+        networks:
+          - elk
+    volumes:
+      es_data:
+    networks:
+      elk:
+    EOF
+
+  # Write logstash.conf
+  - |
+    cat > /home/azureuser/ELK/logstash/logstash.conf << 'EOF'
+    input {
+      file {
+        path => "/logs/elk-dataset-1.csv"
+        start_position => "beginning"
+        sincedb_path => "/dev/null"
+        tags => ["dataset1"]
+      }
+      file {
+        path => "/logs/elk-dataset-2.csv"
+        start_position => "beginning"
+        sincedb_path => "/dev/null"
+        tags => ["dataset2"]
+      }
+    }
+    filter {
+      if "dataset1" in [tags] {
+        csv {
+          separator => ","
+          columns => [
+            "Device Time","Source IP Address","Source Port",
+            "Source Protocol","Source Geolocation Country",
+            "Source Geolocation City","source_geo_lat","source_geo_lon",
+            "Source Organization","Event Type","Event Severity",
+            "Destination IP Address","Destination Port",
+            "Destination Protocol","Destination Geolocation Country",
+            "Destination Geolocation City","dest_geo_lat","dest_geo_lon",
+            "Destination Organization","Details"
+          ]
+        }
+        date {
+          match => [ "Device Time", "MMM dd, yyyy @ HH:mm:ss.SSS" ]
+          target => "@timestamp"
+        }
+        geoip {
+          source => "Source IP Address"
+          target => "geoip"
+        }
+        mutate {
+          convert => {
+            "source_geo_lat" => "float"
+            "source_geo_lon" => "float"
+            "dest_geo_lat"   => "float"
+            "dest_geo_lon"   => "float"
+            "Source Port"    => "integer"
+            "Destination Port" => "integer"
+          }
+          add_field => {
+            "[source_geo][lat]" => "%{source_geo_lat}"
+            "[source_geo][lon]" => "%{source_geo_lon}"
+            "[dest_geo][lat]"   => "%{dest_geo_lat}"
+            "[dest_geo][lon]"   => "%{dest_geo_lon}"
+          }
+        }
+        mutate {
+          convert => {
+            "[source_geo][lat]" => "float"
+            "[source_geo][lon]" => "float"
+            "[dest_geo][lat]"   => "float"
+            "[dest_geo][lon]"   => "float"
+          }
+          remove_field => ["source_geo_lat","source_geo_lon","dest_geo_lat","dest_geo_lon"]
+        }
+        if [Source IP Address] == "Source IP Address" { drop {} }
+      }
+      if "dataset2" in [tags] {
+        csv {
+          separator => ","
+          columns => [
+            "timestamp","source_ip","destination_ip",
+            "source_country","service","destination_port",
+            "protocol","action"
+          ]
+        }
+        date {
+          match => [ "timestamp", "ISO8601" ]
+          target => "@timestamp"
+        }
+        mutate {
+          convert => { "destination_port" => "integer" }
+        }
+        if [source_ip] == "source_ip" { drop {} }
+      }
+    }
+    output {
+      elasticsearch {
+        hosts    => ["http://elasticsearch:9200"]
+        index    => "siem-logs-%{+YYYY.MM.dd}"
+        user     => "elastic"
+        password => "${ELASTIC_PASSWORD}"
+      }
+      stdout { codec => rubydebug }
+    }
+    EOF
+
+  # Fix ownership
   - chown -R azureuser:azureuser /home/azureuser/ELK
+
+  # Start ELK
+  - cd /home/azureuser/ELK && docker compose --env-file .env up -d
+
+  # Wait for Elasticsearch to be healthy then set kibana_system password
+  - |
+    for i in $(seq 1 20); do
+      STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u elastic:umaarlll http://localhost:9200)
+      if [ "$STATUS" = "200" ]; then
+        curl -s -X POST -u elastic:umaarlll "http://localhost:9200/_security/user/kibana_system/_password" \
+          -H "Content-Type: application/json" \
+          -d '{"password":"umaarlll"}'
+        break
+      fi
+      sleep 15
+    done
