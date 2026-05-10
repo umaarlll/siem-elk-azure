@@ -1,420 +1,105 @@
-# 🔐 EyeSec — ELK SIEM on Azure
+# siem-elk-azure
 
-A Security Information and Event Management (SIEM) platform built with the Elastic Stack (ELK), containerized with Docker and deployed on Microsoft Azure. The platform ingests, parses and visualizes 17,000+ security events enabling real-time threat detection, monitoring and incident investigation.
+A cloud-based SIEM platform running the ELK stack on Azure, fully automated with Terraform and cloud-init. What started as a university assignment turned into a proper IaC project because why deploy manually when you can just terraform apply and go touch grass.
 
-> **Status:** 🚧 In Progress — Detection & Investigation phase coming soon.
+## What is this
 
----
+This spins up a full security monitoring stack on Azure from scratch. One command and you get a VM with Elasticsearch, Kibana, and Logstash running, datasets loaded, and everything configured. No SSH-ing in, no manual setup, nothing.
 
-## 😤 The Honest Story
+The dataset is a mix of simulated network security events covering DDoS, SQL injection, phishing, ransomware, malware, and brute force attacks. About 17k events total across two datasets.
 
-So I got assigned a SIEM project and the setup guide said to manually install OpenJDK, extract three zip files and configure everything by hand.
+## Stack
 
-I did not want to do that.
+- Terraform for provisioning all Azure infrastructure
+- cloud-init for bootstrapping Docker and ELK on first boot
+- Elasticsearch + Kibana + Logstash 8.13.0
+- Azure Blob Storage for dataset hosting
+- Cloudflare tunnel for remote Kibana access (optional)
 
-Instead I containerized the whole thing with Docker so it spins up with one command. Then realized my teammates needed access too — so I threw it on Azure, set up a Cloudflare tunnel for a public HTTPS URL and called it a day.
+## Infrastructure
 
-Lazy? Maybe. But it works, it's secure and my teammates just need a link. 🔗
+Everything lives inside one resource group in East Asia region.
 
-What followed was several days of troubleshooting that I did not expect.
+- Virtual network with a dedicated subnet
+- Network security group allowing SSH (22), Kibana (5601), and Elasticsearch (9200)
+- Static public IP
+- Ubuntu 22.04 VM running Standard B2as v2 (2 vCPU, 8GB RAM)
 
----
+## How to use
 
-## 🤕 Hardships (The Real Documentation)
-
-### 1. Elasticsearch kept dying on startup
-Every time Docker started, Elasticsearch would crash silently. No obvious error. Just... gone.
-
-Turns out Linux has a default virtual memory limit that Elasticsearch hates. You need to run:
-```bash
-sysctl -w vm.max_map_count=262144
-```
-
-And because I didn't make it permanent, I had to run this **every single time** Docker Desktop restarted. Every. Single. Time.
-
-*Fix: add it to `/etc/sysctl.conf` on Linux. On Windows WSL, add it to `.wslconfig`.*
-
----
-
-### 2. xpack security blocking everything
-Moved to Azure VM, started the stack, opened Kibana — it asked for a token. Cool. Except the token expired. And the password was auto-generated and I didn't save it. And resetting it required Elasticsearch to be running. Which it wasn't.
-
-The fix was to add one line to docker-compose.yml:
-```yaml
-- xpack.security.enabled=false
-```
-
-Done. Should have done this from the start.
-
----
-
-### 3. Logstash crashing silently
-Logstash would start, run for about 60 seconds, then disappear from `docker compose ps`. No error message visible. Just gone.
-
-Reason: the log file didn't exist yet. Logstash couldn't find it so it just gave up and left without saying anything.
-
-*Lesson: always check `docker logs logstash` before assuming everything is fine.*
-
----
-
-### 4. Missing one `}` in logstash.conf
-Spent way too long wondering why Logstash kept refusing to start after adding the geoip filter. The error message was:
-
-```
-Expected one of [ \t\r\n], "#", "=>" at line 38
-```
-
-It was a missing closing curly brace. One character. That's it.
-
----
-
-### 5. "Other" showing instead of real data
-Built a beautiful bar chart showing Top Source IPs. Except it showed:
-
-```
-Other → 16,110 events
-1.144.155.98 → 33 events
-```
-
-Turns out the dataset has hundreds of IPs each with **exactly 33 events**. Perfectly distributed. Every single one. Because it's a simulated lab dataset and someone thought that was a good idea.
-
-No fix. Just vibes. The "Other" stays.
-
----
-
-### 6. All the map dots were in the ocean
-Built the threat map. Looked impressive. Zoomed in. Half the dots were in the middle of the Pacific Ocean. Some were near Antarctica.
-
-First response I got when asking for help: *"The fake coordinates can't be fixed."*
-
-Reader, they were fixed.
-
-The actual fix involved:
-- Adding a geoip filter to Logstash to enrich IPs with real coordinates
-- Creating a proper `geo_point` index template **before** ingesting
-- Waiting for re-ingestion
-- Creating a runtime field in Kibana using Painless script
-- Deleting and re-adding the map layer with the new field
-- Fighting with Kibana's read-only Source details panel
-- Eventually just deleting the layer and adding a fresh one
-
-The map now shows dots on actual countries. With color coding by severity. And tooltips. Worth it.
-
----
-
-### 7. GitHub authentication failure
-```
-remote: Invalid username or token. Password authentication is not supported.
-fatal: Authentication failed
-```
-
-GitHub removed password authentication for Git operations. You need a Personal Access Token now. Which I didn't know. So I tried my password four times before reading the error message properly.
-
----
-
-### 8. Pushed the SSH private key to GitHub
-Not my proudest moment. The `.pem` key file for SSHing into the Azure VM somehow ended up in the repo. Fixed immediately with `git rm --cached` but still.
-
-Add this to your `.gitignore` before anything else:
-```
-*.pem
-*.env
-*.log
-logs/
-```
-
----
-
-## 📸 Screenshots
-
-> Dashboard and investigation screenshots coming soon.
-
----
-
-## 🏗️ Architecture
-
-```
-Datasets (CSV logs)
-      ↓
-  Logstash (parse, enrich & ingest)
-      ↓
-Elasticsearch (store & index)
-      ↓
-   Kibana (visualize & investigate)
-      ↓
-Cloudflare Tunnel (HTTPS + DDoS protection)
-      ↓
-   Public URL (teammates & stakeholders)
-```
-
-**Infrastructure:**
-```
-Cloud Provider   → Microsoft Azure (Standard B2as v2)
-OS               → Ubuntu 22.04 LTS
-Containerization → Docker + Docker Compose
-ELK Version      → 8.13.0
-Security         → Cloudflare Tunnel (HTTPS + DDoS)
-GeoIP            → MaxMind GeoLite2 via Logstash
-```
-
----
-
-## ✨ Features
-
-- **17,000+ security events** ingested from multiple log sources
-- **Multi-source ingestion** — supports multiple CSV datasets via Logstash
-- **Interactive dashboards** — events over time, severity breakdown, event types
-- **Geospatial threat map** — real coordinates via GeoIP enrichment, color coded by severity, with tooltips
-- **Threat detection** — DDoS, Brute Force, SQL Injection, Phishing, Ransomware, Malware
-- **Kibana Timeline** — incident investigation and attacker tracing
-- **VirusTotal integration** — IoC validation for IP addresses and domains
-- **Public HTTPS access** — Cloudflare tunnel for team collaboration
-- **Dockerized deployment** — fully containerized, easy to replicate
-
----
-
-## 📊 Dataset
-
-| Dataset | Period | Events | Source |
-|---------|--------|--------|--------|
-| elk-dataset-1.csv | Dec 2023 | ~16,440 | Academic lab dataset |
-| elk-dataset-2.csv | Apr 2025 | ~14,000 | Extended academic dataset |
-
----
-
-## 🔍 Detected Threats
-
-| Event Type | Count | Severity |
-|------------|-------|----------|
-| DDoS | 8,184 | High |
-| Normal | 4,425 | Low |
-| SQL Injection | 795 | High |
-| Phishing | 783 | Medium |
-| Ransomware | 777 | High |
-| Malware | 768 | High |
-| Brute Force | 708 | Medium |
-
-**Traffic Actions:** Allowed 42.66% · Blocked 40.78% · Success 8.28% · Failure 8.28%
-
----
-
-## 🛠️ Technologies Used
-
-| Technology | Purpose |
-|------------|---------|
-| Elasticsearch 8.13.0 | Log storage and indexing |
-| Logstash 8.13.0 | Log ingestion, parsing and GeoIP enrichment |
-| Kibana 8.13.0 | Visualization and investigation |
-| Docker + Compose | Containerized deployment |
-| Microsoft Azure | Cloud infrastructure |
-| Cloudflare Tunnel | HTTPS and DDoS protection |
-| MaxMind GeoLite2 | IP geolocation database |
-| VirusTotal | IoC validation |
-| Ubuntu 22.04 | Server OS |
-
----
-
-## ⚡ TLDR — Quick Start
-
-### Start the platform
-```bash
-# 1. Start VM
-# Azure Portal → Virtual Machines → SIEM-ELK-Server → Start → wait 2-3 mins
-
-# 2. SSH into VM
-ssh -i C:\ELK\SIEM-ELK-Server_key.pem azureuser@<VM_IP_ADDRESS>
-
-# 3. Start Docker
-cd ~/ELK
-docker compose up -d
-
-# 4. Start Cloudflare tunnel
-nohup cloudflared tunnel --url http://localhost:5601 > cloudflared.log 2>&1 &
-
-# 5. Get your public URL
-cat cloudflared.log | grep "trycloudflare.com"
-```
-
-### Stop the platform
-```bash
-# 1. Stop Cloudflare tunnel
-pkill cloudflared
-
-# 2. Stop Docker gracefully
-cd ~/ELK
-docker compose down
-
-# 3. Stop VM
-# Azure Portal → Virtual Machines → SIEM-ELK-Server → Stop → confirm
-```
-
----
-
-## 🚀 Full Setup Guide
-
-### Prerequisites
-- Microsoft Azure account (Standard B2as v2 — 2 vCPUs, 8GB RAM)
-- Ubuntu 22.04 LTS VM
-- Docker + Docker Compose installed
-- Cloudflared installed
-- CSV log datasets
-
-### 1. Clone this repository
-```bash
-git clone https://github.com/umaarlll/siem-elk-azure.git
-cd siem-elk-azure
-```
-
-### 2. Set virtual memory (do this or Elasticsearch will crash)
-```bash
-sudo sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
-```
-
-### 3. Add your datasets
-```bash
-cp your-dataset-1.csv ./logs/elk-dataset-1.csv
-cp your-dataset-2.csv ./logs/elk-dataset-2.csv
-```
-
-### 4. Create geo_point index template (do this BEFORE ingesting or the map won't work)
-```bash
-curl -u elastic:yourpassword -X PUT "http://localhost:9200/_index_template/siem-logs-template" \
-  -H 'Content-Type: application/json' -d'
-{
-  "index_patterns": ["siem-logs-*"],
-  "template": {
-    "mappings": {
-      "properties": {
-        "source_geo":         { "type": "geo_point" },
-        "dest_geo":           { "type": "geo_point" },
-        "geoip.geo.location": { "type": "geo_point" }
-      }
-    }
-  }
-}'
-```
-
-### 5. Launch ELK Stack
-```bash
-docker compose up -d
-docker compose ps   # verify all 3 containers are running
-```
-
-### 6. Configure Kibana
-```
-Open http://localhost:5601
-→ Stack Management → Data Views → Create data view
-→ Index pattern: siem-logs-*
-→ Timestamp: @timestamp
-→ Save
-```
-
-### 7. Start Cloudflare tunnel
-```bash
-nohup cloudflared tunnel --url http://localhost:5601 > cloudflared.log 2>&1 &
-cat cloudflared.log | grep "trycloudflare.com"
-```
-
----
-
-## 🔧 Auto-start on VM Boot (Optional)
-
-### Auto-start Docker
-```bash
-sudo systemctl enable docker
-```
-
-### Auto-start Cloudflared
-```bash
-sudo nano /etc/systemd/system/cloudflared.service
-```
-
-Paste:
-```ini
-[Unit]
-Description=Cloudflare Tunnel
-After=network.target
-
-[Service]
-ExecStart=cloudflared tunnel --url http://localhost:5601
-Restart=always
-User=azureuser
-
-[Install]
-WantedBy=multi-user.target
-```
+You need Terraform and Azure CLI installed. Then just log in and go.
 
 ```bash
-sudo systemctl enable cloudflared
-sudo systemctl start cloudflared
-journalctl -u cloudflared | grep "trycloudflare.com"
+az login
+cd terraform
+terraform init
+terraform apply
 ```
 
----
+Grab the IP from the output, go to http://YOUR_IP:5601, and log in with the credentials you set. That is it.
 
-## 🗂️ Project Structure
+## What happens on first boot
 
+cloud-init handles everything automatically so you do not have to touch the VM at all.
+
+1. Installs Docker and Docker Compose
+2. Sets vm.max_map_count to 262144 (Elasticsearch needs this or it refuses to start)
+3. Downloads both datasets from Azure Blob Storage
+4. Runs fix_coordinates.py to replace fake geo coordinates in dataset 1 with real country centroids
+5. Writes docker-compose.yml and logstash.conf
+6. Starts the ELK stack
+7. Waits for Elasticsearch to be healthy, then sets the kibana_system password
+
+The whole thing takes around 5 to 10 minutes after the VM is created.
+
+## Setup
+
+Copy the example vars file and fill in your values.
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
 ```
-siem-elk-azure/
-├── docker-compose.yml        # ELK Stack services
-├── logstash/
-│   └── logstash.conf         # Log ingestion pipeline
-├── logs/                     # Dataset directory (gitignored)
-│   ├── elk-dataset-1.csv
-│   └── elk-dataset-2.csv
-├── screenshots/              # Dashboard screenshots
-└── README.md
+
+You need to fill in your Azure subscription ID, admin username, and SSH public key. The elastic password goes in there too, keep that file out of git.
+
+## Tear down
+
+```bash
+terraform destroy
 ```
 
----
+Blows up everything. Clean slate. Run terraform apply again and it rebuilds from scratch.
 
-## 👥 Team Contributions
+If you only want to rebuild the VM without touching the network resources, target just the VM.
 
-| Member | Role |
-|--------|------|
-| Umar | Infrastructure setup, Docker deployment, Dashboard engineering, Monitoring phase |
-| Teammate 2 | Detection phase |
-| Teammate 3 | Kibana Timeline investigation |
-| Teammate 4 | VirusTotal IoC analysis & report |
+```bash
+terraform destroy -target=azurerm_linux_virtual_machine.siem_vm
+terraform apply
+```
 
----
+This keeps the same public IP so you do not have to update anything.
 
-## 📋 Assignment Progress
+## Dashboard
 
-| Task | Marks | Status |
-|------|-------|--------|
-| Dashboard Engineering | 10 | ✅ Done |
-| Monitoring Phase | 10 | ✅ Done |
-| Detection Phase | 15 | 🚧 In Progress |
-| ELK Timeline Investigation | 15 | 🚧 In Progress |
-| VirusTotal Investigation | 10 | 🚧 In Progress |
-| **Total** | **60** | |
+The Kibana dashboard covers:
 
----
+- Total events, DDoS count, high severity count, blocked vs allowed traffic
+- Global threat map with source and destination geolocation
+- Event type breakdown, protocol distribution, traffic action donut
+- Top source countries for both datasets
+- Top source IPs
+- Events over time
 
-## 🗺️ Planned Improvements
+## Known quirks
 
-- [ ] VirusTotal API integration for automated IoC enrichment
-- [ ] Makefile for one-command start/stop
-- [ ] Terraform IaC for reproducible Azure deployment
+Top source IPs for the 2023 dataset shows mostly "Other" because every IP in that dataset has exactly 33 events each. Simulated dataset behavior, nothing wrong with the config.
 
----
+Some map dots land in the ocean because IP geolocation is not perfect. Normal limitation.
 
-## ⚠️ Security Notice
+Cloudflare tunnel URL changes every restart on the free tier. If you want a stable URL you need a proper domain.
 
-This repository does not contain any credentials, passwords or API keys. Before deploying:
-- Change the default Elasticsearch password
-- Never commit `.env` files or credentials
-- Never commit `.pem` key files (ask me how I know)
-- Use environment variables for sensitive values
+## Planned improvements
 
----
-
-## 📄 License
-
-This project is for academic purposes only.
-
----
-
-> Built with ❤️ and an unhealthy amount of `docker logs logstash` — ELK SIEM on Azure
+- Move secrets into Azure Key Vault
+- Add storage account and blob uploads into Terraform so everything is one terraform apply
+- VirusTotal API integration for automated IOC enrichment
