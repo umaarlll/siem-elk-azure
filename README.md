@@ -1,3 +1,6 @@
+<img width="1693" height="929" alt="siem-elk-arch" src="https://github.com/user-attachments/assets/ff9f9d3e-9ee2-4706-b8ac-eab632995216" />
+
+
 # siem-elk-azure
 
 A cloud-based SIEM platform running the ELK stack on Azure, fully automated with Terraform and cloud-init. What started as a university assignment turned into a proper IaC project because why deploy manually when you can just terraform apply and go touch grass.
