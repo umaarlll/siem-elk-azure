@@ -116,11 +116,11 @@ runcmd:
           columns => [
             "Device Time","Source IP Address","Source Port",
             "Source Protocol","Source Geolocation Country",
-            "Source Geolocation City","source_geo_lat","source_geo_lon",
+            "Source Geolocation City","Source Geolocation Latitude","Source Geolocation Longitude",
             "Source Organization","Event Type","Event Severity",
             "Destination IP Address","Destination Port",
             "Destination Protocol","Destination Geolocation Country",
-            "Destination Geolocation City","dest_geo_lat","dest_geo_lon",
+            "Destination Geolocation City","Destination Geolocation Latitude","Destination Geolocation Longitude",
             "Destination Organization","Details"
           ]
         }
@@ -134,18 +134,18 @@ runcmd:
         }
         mutate {
           convert => {
-            "source_geo_lat" => "float"
-            "source_geo_lon" => "float"
-            "dest_geo_lat"   => "float"
-            "dest_geo_lon"   => "float"
-            "Source Port"    => "integer"
-            "Destination Port" => "integer"
+            "Source Geolocation Latitude"       => "float"
+            "Source Geolocation Longitude"      => "float"
+            "Destination Geolocation Latitude"  => "float"
+            "Destination Geolocation Longitude" => "float"
+            "Source Port"                       => "integer"
+            "Destination Port"                  => "integer"
           }
           add_field => {
-            "[source_geo][lat]" => "%{source_geo_lat}"
-            "[source_geo][lon]" => "%{source_geo_lon}"
-            "[dest_geo][lat]"   => "%{dest_geo_lat}"
-            "[dest_geo][lon]"   => "%{dest_geo_lon}"
+            "[source_geo][lat]" => "%{Source Geolocation Latitude}"
+            "[source_geo][lon]" => "%{Source Geolocation Longitude}"
+            "[dest_geo][lat]"   => "%{Destination Geolocation Latitude}"
+            "[dest_geo][lon]"   => "%{Destination Geolocation Longitude}"
           }
         }
         mutate {
@@ -155,7 +155,13 @@ runcmd:
             "[dest_geo][lat]"   => "float"
             "[dest_geo][lon]"   => "float"
           }
-          remove_field => ["source_geo_lat","source_geo_lon","dest_geo_lat","dest_geo_lon"]
+          remove_field => [
+            "Source Geolocation Latitude","Source Geolocation Longitude",
+            "Destination Geolocation Latitude","Destination Geolocation Longitude"
+          ]
+        }
+        mutate {
+          copy => { "source_geo" => "real_threat_location" }
         }
         if [Source IP Address] == "Source IP Address" { drop {} }
       }
@@ -197,12 +203,56 @@ runcmd:
 
   # Wait for Elasticsearch to be healthy then set kibana_system password
   - |
-    for i in $(seq 1 20); do
+    for i in $(seq 1 24); do
       STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u elastic:umaarlll http://localhost:9200)
       if [ "$STATUS" = "200" ]; then
         curl -s -X POST -u elastic:umaarlll "http://localhost:9200/_security/user/kibana_system/_password" \
           -H "Content-Type: application/json" \
           -d '{"password":"umaarlll"}'
+        break
+      fi
+      sleep 15
+    done
+
+  # Create index template for geo_point mapping
+  - |
+    for i in $(seq 1 20); do
+      STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u elastic:umaarlll http://localhost:9200)
+      if [ "$STATUS" = "200" ]; then
+        curl -s -X PUT -u elastic:umaarlll "http://localhost:9200/_index_template/siem-logs" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "index_patterns": ["siem-logs-*"],
+            "template": {
+              "mappings": {
+                "properties": {
+                  "source_geo": { "type": "geo_point" },
+                  "dest_geo": { "type": "geo_point" },
+                  "real_threat_location": { "type": "geo_point" },
+                  "geoip": {
+                    "properties": {
+                      "location": { "type": "geo_point" }
+                    }
+                  }
+                }
+              }
+            }
+          }'
+        break
+      fi
+      sleep 15
+    done
+
+  # Wait for Kibana to be ready, then import dashboard
+  - |
+    for i in $(seq 1 24); do
+      STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5601/api/status)
+      if [ "$STATUS" = "200" ]; then
+        curl -o /home/azureuser/ELK/dashboard.ndjson "https://raw.githubusercontent.com/umaarlll/siem-elk-azure/main/kibana/dashboard.ndjson"
+        curl -s -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
+          -u elastic:umaarlll \
+          -H "kbn-xsrf: true" \
+          --form file=@/home/azureuser/ELK/dashboard.ndjson
         break
       fi
       sleep 15
