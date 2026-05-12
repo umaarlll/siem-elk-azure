@@ -14,3 +14,4 @@ logs/
 
 terraform/*.tfstate
 terraform/*.tfstate.backup
+logs/
