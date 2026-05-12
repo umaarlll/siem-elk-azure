@@ -126,9 +126,36 @@ resource "azurerm_linux_virtual_machine" "siem_vm" {
   }
 }
 
+resource "azurerm_storage_account" "siem_storage" {
+  name                     = "siemelkstorage"
+  resource_group_name      = azurerm_resource_group.siem_rg.name
+  location                 = azurerm_resource_group.siem_rg.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  allow_nested_items_to_be_public = true
+}
 
+resource "azurerm_storage_container" "datasets" {
+  name                  = "datasets"
+  storage_account_name  = azurerm_storage_account.siem_storage.name
+  container_access_type = "blob"
+}
 
+resource "azurerm_storage_blob" "dataset1" {
+  name                   = "elk-dataset-1.csv"
+  storage_account_name   = azurerm_storage_account.siem_storage.name
+  storage_container_name = azurerm_storage_container.datasets.name
+  type                   = "Block"
+  source                 = "../logs/elk-dataset-1.csv"
+}
 
+resource "azurerm_storage_blob" "dataset2" {
+  name                   = "elk-dataset-2.csv"
+  storage_account_name   = azurerm_storage_account.siem_storage.name
+  storage_container_name = azurerm_storage_container.datasets.name
+  type                   = "Block"
+  source                 = "../logs/elk-dataset-2.csv"
+}
 
 
 

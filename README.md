@@ -1,108 +1,225 @@
-<img width="1693" height="929" alt="siem-elk-arch" src="https://github.com/user-attachments/assets/ff9f9d3e-9ee2-4706-b8ac-eab632995216" />
+# Cloud-Based Threat Monitoring Infrastructure Using ELK Stack on Azure
 
+A fully automated SIEM platform built on the ELK stack, provisioned on Microsoft Azure using Terraform and cloud-init. Zero manual steps after `terraform apply`.
 
-# siem-elk-azure
+---
 
-A cloud-based SIEM platform running the ELK stack on Azure, fully automated with Terraform and cloud-init. What started as a university assignment turned into a proper IaC project because why deploy manually when you can just terraform apply and go touch grass.
+## Architecture
 
-## What is this
+```
+Developer
+    |
+    | terraform apply
+    v
+Terraform (IaC)
+    |
+    | provisions 12 resources
+    v
+Azure Resource Group: siem-elk-rg (East Asia)
+    |
+    +-- Azure Virtual Network: siem-vnet (10.0.0.0/16)
+    |       |
+    |       +-- Subnet: siem-subnet (10.0.1.0/24)
+    |               |
+    |               +-- NSG: ports 22, 5601, 9200
+    |               |
+    |               +-- VM: siem-elk-vm (Ubuntu 22.04, Standard_B2as_v2)
+    |                       |
+    |                       | cloud-init on first boot
+    |                       |
+    |                       +-- pulls fix_coordinates.py from GitHub
+    |                       +-- pulls dashboard.ndjson from GitHub
+    |                       +-- downloads datasets from Blob Storage
+    |                       +-- Docker: Logstash -> Elasticsearch -> Kibana
+    |
+    +-- Azure Blob Storage: siemelkstorage
+            |
+            +-- Container: datasets
+                    +-- elk-dataset-1.csv
+                    +-- elk-dataset-2.csv
+```
 
-This spins up a full security monitoring stack on Azure from scratch. One command and you get a VM with Elasticsearch, Kibana, and Logstash running, datasets loaded, and everything configured. No SSH-ing in, no manual setup, nothing.
+---
 
-The dataset is a mix of simulated network security events covering DDoS, SQL injection, phishing, ransomware, malware, and brute force attacks. About 17k events total across two datasets.
+## Repository Structure
 
-## Stack
+```
+siem-elk-azure/
+├── fix_coordinates.py          # normalizes country coordinates in dataset1
+├── logstash/
+│   └── logstash.conf           # pipeline: CSV parse, geo mapping, ES output
+├── logs/                       # gitignored — place CSVs here locally
+├── kibana/
+│   └── dashboard.ndjson        # exported Kibana dashboard (auto-imported on boot)
+├── README.md
+└── terraform/
+    ├── main.tf
+    ├── variables.tf
+    ├── outputs.tf
+    ├── cloud-init.yaml         # full VM automation on first boot
+    ├── terraform.tfvars        # gitignored
+    └── terraform.tfvars.example
+```
 
-- Terraform for provisioning all Azure infrastructure
-- cloud-init for bootstrapping Docker and ELK on first boot
-- Elasticsearch + Kibana + Logstash 8.13.0
-- Azure Blob Storage for dataset hosting
-- Cloudflare tunnel for remote Kibana access (optional)
+---
 
-## Infrastructure
+## Prerequisites
 
-Everything lives inside one resource group in East Asia region.
+- Terraform >= 1.0
+- Azure CLI authenticated (`az login`)
+- An Azure subscription
+- SSH key pair
 
-- Virtual network with a dedicated subnet
-- Network security group allowing SSH (22), Kibana (5601), and Elasticsearch (9200)
-- Static public IP
-- Ubuntu 22.04 VM running Standard B2as v2 (2 vCPU, 8GB RAM)
+---
 
-## How to use
+## Setup
 
-You need Terraform and Azure CLI installed. Then just log in and go.
+**1. Clone the repository**
 
 ```bash
-az login
+git clone https://github.com/umaarlll/siem-elk-azure.git
+cd siem-elk-azure
+```
+
+**2. Place datasets**
+
+Put your CSV files in the `logs/` directory:
+
+```
+logs/elk-dataset-1.csv
+logs/elk-dataset-2.csv
+```
+
+**3. Configure variables**
+
+```bash
+cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+```
+
+Edit `terraform.tfvars`:
+
+```hcl
+subscription_id     = "your-subscription-id"
+resource_group_name = "siem-elk-rg"
+location            = "eastasia"
+admin_username      = "azureuser"
+ssh_public_key      = "ssh-rsa AAAA..."
+```
+
+**4. Deploy**
+
+```bash
 cd terraform
 terraform init
 terraform apply
 ```
 
-Grab the IP from the output, go to http://YOUR_IP:5601, and log in with the credentials you set. That is it.
+Provisioning takes approximately 10-15 minutes. cloud-init runs automatically and handles everything on first boot.
 
-## What happens on first boot
+**5. Access Kibana**
 
-cloud-init handles everything automatically so you do not have to touch the VM at all.
-
-1. Installs Docker and Docker Compose
-2. Sets vm.max_map_count to 262144 (Elasticsearch needs this or it refuses to start)
-3. Downloads both datasets from Azure Blob Storage
-4. Runs fix_coordinates.py to replace fake geo coordinates in dataset 1 with real country centroids
-5. Writes docker-compose.yml and logstash.conf
-6. Starts the ELK stack
-7. Waits for Elasticsearch to be healthy, then sets the kibana_system password
-
-The whole thing takes around 5 to 10 minutes after the VM is created.
-
-## Setup
-
-Copy the example vars file and fill in your values.
-
-```bash
-cp terraform.tfvars.example terraform.tfvars
+```
+URL      : http://<VM_PUBLIC_IP>:5601
+Username : elastic
+Password : defined in terraform.tfvars / .env
 ```
 
-You need to fill in your Azure subscription ID, admin username, and SSH public key. The elastic password goes in there too, keep that file out of git.
+The SIEM Security Overview dashboard and Global Threat Source Map are imported automatically.
 
-## Tear down
+**6. Tear down**
 
 ```bash
 terraform destroy
 ```
 
-Blows up everything. Clean slate. Run terraform apply again and it rebuilds from scratch.
+---
 
-If you only want to rebuild the VM without touching the network resources, target just the VM.
+## What cloud-init Does on First Boot
 
-```bash
-terraform destroy -target=azurerm_linux_virtual_machine.siem_vm
-terraform apply
+Executed automatically in this order:
+
+```
+1.  Install Docker and Docker Compose
+2.  Set vm.max_map_count=262144 (required by Elasticsearch)
+3.  Download elk-dataset-1.csv and elk-dataset-2.csv from Azure Blob Storage
+4.  Download fix_coordinates.py from GitHub and run it on dataset1
+5.  Write docker-compose.yml, logstash.conf, and .env
+6.  Start Elasticsearch, Logstash, and Kibana via docker compose
+7.  Wait for Elasticsearch to be healthy, then set kibana_system password
+8.  Create index template with geo_point mapping before Logstash indexes data
+9.  Wait for Kibana to be healthy, then import dashboard.ndjson via saved objects API
 ```
 
-This keeps the same public IP so you do not have to update anything.
+---
 
-## Dashboard
+## Data Pipeline
 
-The Kibana dashboard covers:
+```
+elk-dataset-1.csv  (network threat logs with geo coordinates)
+elk-dataset-2.csv  (firewall logs)
+        |
+        | Logstash
+        | - CSV parse with explicit column mapping
+        | - Date parsing to @timestamp
+        | - GeoIP enrichment via MaxMind
+        | - Coordinate normalization to source_geo and dest_geo (geo_point)
+        | - Copy source_geo to real_threat_location for map visualization
+        v
+Elasticsearch index: siem-logs-YYYY.MM.dd
+        |
+        v
+Kibana
+- SIEM Security Overview dashboard
+- Global Threat Source Map (real_threat_location field)
+```
 
-- Total events, DDoS count, high severity count, blocked vs allowed traffic
-- Global threat map with source and destination geolocation
-- Event type breakdown, protocol distribution, traffic action donut
-- Top source countries for both datasets
-- Top source IPs
-- Events over time
+---
 
-## Known quirks
+## Tradeoffs and Known Issues
 
-Top source IPs for the 2023 dataset shows mostly "Other" because every IP in that dataset has exactly 33 events each. Simulated dataset behavior, nothing wrong with the config.
+**ELASTIC_PASSWORD is hardcoded in cloud-init**
+The password is stored in plaintext in `cloud-init.yaml` and `.env`. The correct fix is Azure Key Vault with a VM Managed Identity fetching the secret at boot. Not implemented in this version.
 
-Some map dots land in the ocean because IP geolocation is not perfect. Normal limitation.
+**Map coordinates are partially normalized**
+`fix_coordinates.py` maps country names to real centroids with jitter. It covers approximately 100 countries. Rows with unrecognized country names retain the original random coordinates from the fake dataset, which places some dots in oceans.
 
-Cloudflare tunnel URL changes every restart on the free tier. If you want a stable URL you need a proper domain.
+**Terraform state is local**
+`terraform.tfstate` is stored locally. In a team or production environment this should be moved to an Azure Blob Storage backend with state locking.
 
-## Planned improvements
+**No HTTPS**
+Kibana is served over HTTP on port 5601. Acceptable for a lab environment. Production would require a reverse proxy with TLS termination.
 
-- Move secrets into Azure Key Vault
-- Add storage account and blob uploads into Terraform so everything is one terraform apply
-- VirusTotal API integration for automated IOC enrichment
+**NSG allows 9200 from any source**
+Elasticsearch port 9200 is open to the internet. In production this should be restricted to the subnet or a specific IP range.
+
+**Elasticsearch index template must exist before first indexing**
+If Logstash indexes data before the geo_point template is applied, the mapping defaults to float lat/lon pairs and the map visualization breaks. cloud-init handles this by creating the template between the kibana_system password step and Logstash's first successful connection.
+
+---
+
+## Terraform Resources (12 total)
+
+| Resource | Name |
+|---|---|
+| Resource Group | siem-elk-rg |
+| Virtual Network | siem-vnet |
+| Subnet | siem-subnet |
+| Network Security Group | siem-nsg |
+| NSG Association | siem-nsg-assoc |
+| Public IP | siem-public-ip |
+| Network Interface | siem-nic |
+| Virtual Machine | siem-elk-vm |
+| Storage Account | siemelkstorage |
+| Storage Container | datasets |
+| Storage Blob | elk-dataset-1.csv |
+| Storage Blob | elk-dataset-2.csv |
+
+---
+
+## Future Improvements
+
+- Azure Key Vault for secret management
+- GitHub Actions CI/CD — `terraform plan` on PR, `terraform apply` on merge
+- Terraform remote state backend on Azure Blob Storage
+- HTTPS with Let's Encrypt or Azure Application Gateway
+- Expand `fix_coordinates.py` to cover all countries in the dataset
